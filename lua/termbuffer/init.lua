@@ -38,6 +38,18 @@ function M.setup(opts)
   end, {})
 end
 
+
+-- Helper function to temporarily make buffer modifiable for edits
+local function with_modifiable(buf, func)
+  local was_modifiable = vim.bo[buf].modifiable
+  vim.bo[buf].modifiable = true
+  local success, result = pcall(func)
+  vim.bo[buf].modifiable = was_modifiable
+  if not success then
+    error(result)
+  end
+  return result
+end
 -- 仅获取“当前命令”（最后一个 prompt 到缓冲区末尾）的文本；第一行去掉 prompt
 local function get_current_command_text(buf)
   buf = buf or api.nvim_get_current_buf()
@@ -114,8 +126,9 @@ function M.create_buffer()
 
   -- Buffer setup - IMPORTANT: Set buffer options before adding content
   api.nvim_buf_set_option(buf, "buftype", "acwrite") -- Custom write handling
-  api.nvim_buf_set_option(buf, "filetype", "termbuffer")
+  api.nvim_buf_set_option(buf, "filetype", "sh") -- Use sh filetype for LSP support
   api.nvim_buf_set_option(buf, "swapfile", false)
+  api.nvim_buf_set_option(buf, "modifiable", true) -- Start as modifiable
 
   -- Initialize buffer state tracking
   M.buffer_state.buffers[buf] = {
@@ -154,6 +167,34 @@ function M.create_buffer()
 
   -- Set up autocommands for handling edit restrictions
   local term_group = api.nvim_create_augroup("termbuffer_" .. buf, { clear = true })
+
+  -- Control modifiable state based on cursor position
+  api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI", "BufEnter" }, {
+    group = term_group,
+    buffer = buf,
+    callback = function()
+      local st = M.buffer_state.buffers[buf]
+      if not st then
+        return
+      end
+      
+      local cursor = api.nvim_win_get_cursor(0)
+      local line = cursor[1]
+      local line_count = api.nvim_buf_line_count(buf)
+      
+      -- Only allow editing on the last command block (from prompt_line to end)
+      -- All history lines should be non-modifiable
+      if line >= st.editable_line or line > st.prompt_line then
+        vim.bo[buf].modifiable = true
+        -- If editing the prompt area, move cursor after the prompt
+        if line == st.prompt_line + 1 and cursor[2] < st.prompt_length then
+          api.nvim_win_set_cursor(0, { line, st.prompt_length })
+        end
+      else
+        vim.bo[buf].modifiable = false
+      end
+    end,
+  })
 
   -- Intercept buffer changes to prevent edits on read-only lines
   api.nvim_create_autocmd({ "TextChangedI", "TextChanged" }, {
@@ -225,10 +266,14 @@ function M.create_buffer()
       local pl = st.prompt_line -- 0-based
       local first_line = api.nvim_buf_get_lines(buf, pl, pl + 1, false)[1] or ""
       local prompt = M.config.prompt_symbol
+      local prompt_escaped = vim.pesc(prompt)
 
-      if not string.match(first_line, "^" .. vim.pesc(prompt)) then
-        -- 恢复第一行的 prompt，但不对后续行做任何前缀处理
-        api.nvim_buf_set_lines(buf, pl, pl + 1, false, { prompt .. first_line })
+      if not string.match(first_line, "^" .. prompt_escaped) then
+        -- The prompt was deleted, restore it
+        -- If the line is completely empty or the user backspaced into the prompt
+        with_modifiable(buf, function()
+          api.nvim_buf_set_lines(buf, pl, pl + 1, false, { prompt .. first_line })
+        end)
         -- 调整光标（若光标在第一行且落在 prompt 区域之前，则移至 prompt 之后）
         local cursor = api.nvim_win_get_cursor(0) -- 1-based {line, col}
         if cursor[1] - 1 == pl and cursor[2] < #prompt then
@@ -334,7 +379,9 @@ function M._execute_command()
   -- 空命令：只新起下一条命令的 prompt
   if cmd == "" or cmd:match("^%s*$") then
     local line_count = api.nvim_buf_line_count(buf)
-    api.nvim_buf_set_lines(buf, line_count, line_count, false, { M.config.prompt_symbol })
+    with_modifiable(buf, function()
+      api.nvim_buf_set_lines(buf, line_count, line_count, false, { M.config.prompt_symbol })
+    end)
     -- 更新可编辑行/提示行
     M.buffer_state.editable_line = line_count + 1
     st.editable_line = line_count + 1
@@ -412,7 +459,9 @@ function M.execute_command()
   -- 空命令处理（不变）
   if cmd == "" or cmd:match("^%s*$") then
     local line_count = api.nvim_buf_line_count(buf)
-    api.nvim_buf_set_lines(buf, line_count, line_count, false, { M.config.prompt_symbol })
+    with_modifiable(buf, function()
+      api.nvim_buf_set_lines(buf, line_count, line_count, false, { M.config.prompt_symbol })
+    end)
     M.buffer_state.editable_line = line_count + 1
     st.editable_line = line_count + 1
     st.prompt_line = line_count
@@ -490,7 +539,9 @@ function M.on_stdout(buf, data)
     end
     if line ~= "" then
       -- 立即追加输出行到缓冲区末尾
-      api.nvim_buf_set_lines(buf, line_count, line_count, false, { line })
+      with_modifiable(buf, function()
+        api.nvim_buf_set_lines(buf, line_count, line_count, false, { line })
+      end)
       -- 应用输出高亮
       local output_ns = api.nvim_create_namespace("termbuffer_output")
       api.nvim_buf_set_extmark(buf, output_ns, line_count, 0, {
@@ -518,7 +569,9 @@ function M.on_stderr(buf, data)
   for _, line in ipairs(data) do
     if line ~= "" then
       -- 立即追加错误行到缓冲区末尾
-      api.nvim_buf_set_lines(buf, line_count, line_count, false, { line })
+      with_modifiable(buf, function()
+        api.nvim_buf_set_lines(buf, line_count, line_count, false, { line })
+      end)
       -- 应用错误高亮
       local error_ns = api.nvim_create_namespace("termbuffer_error")
       api.nvim_buf_set_extmark(buf, error_ns, line_count, 0, {
@@ -541,7 +594,9 @@ function M.process_output(buf)
 
   -- Add output lines
   if #M.buffer_state.buffers[buf].output_accum > 0 then
-    api.nvim_buf_set_lines(buf, line_count, line_count, false, M.buffer_state.buffers[buf].output_accum)
+    with_modifiable(buf, function()
+      api.nvim_buf_set_lines(buf, line_count, line_count, false, M.buffer_state.buffers[buf].output_accum)
+    end)
     -- Highlight output
     local output_ns = api.nvim_create_namespace("termbuffer_output")
     for i = 0, #M.buffer_state.buffers[buf].output_accum - 1 do
@@ -558,7 +613,9 @@ function M.process_output(buf)
 
   -- Add error lines
   if #M.buffer_state.buffers[buf].error_accum > 0 then
-    api.nvim_buf_set_lines(buf, line_count, line_count, false, M.buffer_state.buffers[buf].error_accum)
+    with_modifiable(buf, function()
+      api.nvim_buf_set_lines(buf, line_count, line_count, false, M.buffer_state.buffers[buf].error_accum)
+    end)
     -- Highlight errors
     local error_ns = api.nvim_create_namespace("termbuffer_error")
     for i = 0, #M.buffer_state.buffers[buf].error_accum - 1 do
@@ -574,7 +631,9 @@ function M.process_output(buf)
   end
 
   -- Add new prompt
-  api.nvim_buf_set_lines(buf, line_count, line_count, false, { M.config.prompt_symbol })
+  with_modifiable(buf, function()
+    api.nvim_buf_set_lines(buf, line_count, line_count, false, { M.config.prompt_symbol })
+  end)
 
   -- Update editable line
   M.buffer_state.editable_line = line_count + 1
@@ -597,7 +656,9 @@ function M.finish_command(buf)
   local line_count = api.nvim_buf_line_count(buf)
 
   -- 添加新提示符
-  api.nvim_buf_set_lines(buf, line_count, line_count, false, { M.config.prompt_symbol })
+  with_modifiable(buf, function()
+    api.nvim_buf_set_lines(buf, line_count, line_count, false, { M.config.prompt_symbol })
+  end)
 
   -- 更新状态
   M.buffer_state.editable_line = line_count + 1

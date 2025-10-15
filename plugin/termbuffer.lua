@@ -10,9 +10,14 @@ local termbuffer_group = vim.api.nvim_create_augroup('termbuffer_cmds', { clear 
 -- Setup for termbuffer filetype
 vim.api.nvim_create_autocmd("FileType", {
   group = termbuffer_group,
-  pattern = "termbuffer",
+  pattern = "sh",
   callback = function()
     local buf = vim.api.nvim_get_current_buf()
+    
+    -- Only apply to termbuffer buffers (those with buftype acwrite)
+    if vim.bo[buf].buftype ~= "acwrite" then
+      return
+    end
 
     -- Handle insert mode attempts on read-only sections
     vim.api.nvim_create_autocmd({ "InsertEnter" }, {
@@ -23,7 +28,7 @@ vim.api.nvim_create_autocmd("FileType", {
         local bufstate = require('termbuffer').buffer_state.buffers[buf]
 
         -- If not on the last line, move to the last line
-        if cursor[1] ~= line_count then
+        if bufstate and cursor[1] ~= line_count then
           vim.api.nvim_win_set_cursor(0, { line_count, bufstate.prompt_length })
         end
       end
