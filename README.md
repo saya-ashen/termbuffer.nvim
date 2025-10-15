@@ -6,10 +6,11 @@ allowing command execution and history tracking with LSP integration.
 ## Features
 
 - Buffer-based terminal simulation with command history
-- LSP integration for shell script commands
+- LSP integration for shell script commands (uses .sh filetype)
 - Visual distinction between commands and output
 - Command execution via buffer saving (<C-s> or `:w`)
-- Read-only history with editable command input area
+- **Truly read-only history** - previous commands and outputs cannot be edited
+- No files saved to disk - history stays in memory only (safe for sensitive data)
 
 ## Installation
 
@@ -71,21 +72,26 @@ require('termbuffer').setup({
 
 ## How It Works
 
-- The plugin creates a special buffer with a custom filetype (`termbuffer`)
-- Commands are entered at the bottom of the buffer
+- The plugin creates a special buffer with shell script filetype (`.sh`) for LSP support
+- Commands are entered at the bottom of the buffer  
+- The buffer uses custom write handling (`buftype=acwrite`) to prevent file saves
 - When executing a command:
-  1. The command is processed asynchronously
+  1. The command is processed asynchronously via bash
   2. Output is appended to the buffer
-  3. Previous commands and output become read-only
+  3. Previous commands and output become truly read-only (buffer.modifiable = false)
   4. A new prompt is added at the bottom
 - LSP integration provides autocompletion and diagnostics for shell commands
+- History remains in memory only - no files are created on disk
 
 ## Tips
 
 - Use the Enter key to create multi-line commands
 - If you try to enter insert mode on a read-only section, your cursor will
   automatically move to the command input area
+- History sections are truly non-editable - the buffer becomes non-modifiable
+  when your cursor is on history lines
 - The buffer shows a modified status (+) when a new command is being typed
+- The buffer uses .sh filetype for LSP support but never saves to disk
 
 ## Health Check
 
