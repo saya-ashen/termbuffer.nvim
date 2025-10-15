@@ -26,13 +26,14 @@
       packages = forAllSystems (pkgs: {
         termbuffer-nvim = pkgs.vimUtils.buildVimPlugin {
           pname = "termbuffer.nvim";
-          version = "2025-10-15";
-          src = pkgs.fetchFromGitHub {
-            owner = "saya-ashen";
-            repo = "termbuffer.nvim";
-            rev = "main";
-            sha256 = "sha256-XHZW+GBjNkHN6BjlFHkg0wa0nD3q+XdL3qUhLMcX814="; # 先假hash
-          };
+          version = "2025-10-18";
+          src = ./.;
+          # src = pkgs.fetchFromGitHub {
+          #   owner = "saya-ashen";
+          #   repo = "termbuffer.nvim";
+          #   rev = "main";
+          #   sha256 = "sha256-XHZW+GBjNkHN6BjlFHkg0wa0nD3q+XdL3qUhLMcX814="; # 先假hash
+          # };
         };
         default = self.packages.${pkgs.system}.termbuffer-nvim;
       });
